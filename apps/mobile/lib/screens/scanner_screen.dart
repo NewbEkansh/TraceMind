@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:geolocator/geolocator.dart';
 import '../services/api_service.dart';
+import 'dart:convert';
 
 class ScannerScreen extends StatefulWidget {
   const ScannerScreen({Key? key}) : super(key: key);
@@ -11,179 +12,372 @@ class ScannerScreen extends StatefulWidget {
 }
 
 class _ScannerScreenState extends State<ScannerScreen> {
-  final ApiService _apiService = ApiService();
-  final MobileScannerController controller = MobileScannerController();
+  MobileScannerController cameraController = MobileScannerController();
+  bool isProcessing = false;
+  final ApiService apiService = ApiService();
   
-  String? _result;
-  bool _isScanning = false;
-  bool _scanRequested = false; // Only scan when button is pressed
+  // GPS status tracking
+  bool gpsReady = false;
+  double? currentAccuracy;
+  Position? lastKnownPosition;
 
-  Future<void> _handleScan(String code) async {
-    setState(() {
-      _isScanning = true;
-      _scanRequested = false; // Disable further scans
-      _result = 'Verifying with backend...';
-    });
+  @override
+  void initState() {
+    super.initState();
+    _initializeGPS();
+  }
 
+  @override
+  void dispose() {
+    cameraController.dispose();
+    super.dispose();
+  }
+
+  // Initialize and warm up GPS
+  Future<void> _initializeGPS() async {
     try {
+      // Check if location services are enabled
+      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('⚠️ Location services are disabled. Please enable them.'),
+              backgroundColor: Colors.orange,
+              duration: Duration(seconds: 5),
+            ),
+          );
+        }
+        return;
+      }
+
+      // Check permissions
+      LocationPermission permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+        if (permission == LocationPermission.denied) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('⚠️ Location permissions denied'),
+                backgroundColor: Colors.red,
+              ),
+            );
+          }
+          return;
+        }
+      }
+
+      // Get initial GPS fix to warm up
+      print('🛰️ Warming up GPS...');
       Position position = await Geolocator.getCurrentPosition(
         desiredAccuracy: LocationAccuracy.high,
+        timeLimit: const Duration(seconds: 10),
       );
 
-      final response = await _apiService.submitScan(
-        unitId: code,
-        latitude: position.latitude,
-        longitude: position.longitude,
-        timestamp: DateTime.now().toIso8601String(),
-      );
-      
       setState(() {
-        if (response['anomaly_detected'] == true) {
-          _result = '⚠️ ANOMALY DETECTED!\nSpeed: ${response['speed_kmh']?.toStringAsFixed(2)} km/h\nDistance: ${response['distance_km']?.toStringAsFixed(2)} km';
-        } else {
-          _result = '✅ Scan verified\nSpeed: ${response['speed_kmh']?.toStringAsFixed(2)} km/h\nDistance: ${response['distance_km']?.toStringAsFixed(2)} km';
+        lastKnownPosition = position;
+        currentAccuracy = position.accuracy;
+        gpsReady = position.accuracy < 100; // Good if < 100m
+      });
+
+      print('GPS Ready: ${position.latitude}, ${position.longitude}');
+      print('Accuracy: ${position.accuracy}m');
+
+      if (position.accuracy > 100) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('⚠️ GPS accuracy: ${position.accuracy.toStringAsFixed(0)}m (waiting for better signal...)'),
+              backgroundColor: Colors.orange,
+              duration: const Duration(seconds: 3),
+            ),
+          );
         }
-        _isScanning = false;
-      });
-
-      // Clear result after 3 seconds
-      await Future.delayed(const Duration(seconds: 3));
-      setState(() {
-        _result = null;
-      });
+        // Try to get better fix
+        await _improveGPSAccuracy();
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('✅ GPS Ready (${position.accuracy.toStringAsFixed(0)}m accuracy)'),
+              backgroundColor: Colors.green,
+              duration: const Duration(seconds: 2),
+            ),
+          );
+        }
+      }
     } catch (e) {
-      setState(() {
-        _result = '❌ Error: $e';
-        _isScanning = false;
-      });
+      print('GPS initialization error: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('⚠️ GPS error: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     }
   }
 
-  void _requestScan() {
-    setState(() {
-      _scanRequested = true;
-    });
+  // Try to improve GPS accuracy
+  Future<void> _improveGPSAccuracy() async {
+    for (int i = 0; i < 3; i++) {
+      await Future.delayed(const Duration(seconds: 2));
+      try {
+        Position position = await Geolocator.getCurrentPosition(
+          desiredAccuracy: LocationAccuracy.high,
+        );
+        
+        setState(() {
+          lastKnownPosition = position;
+          currentAccuracy = position.accuracy;
+          gpsReady = position.accuracy < 100;
+        });
+
+        print('GPS retry $i: accuracy ${position.accuracy}m');
+
+        if (position.accuracy < 50) {
+          print('✅ Good GPS lock achieved');
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('✅ GPS Ready (${position.accuracy.toStringAsFixed(0)}m)'),
+                backgroundColor: Colors.green,
+                duration: const Duration(seconds: 2),
+              ),
+            );
+          }
+          break;
+        }
+      } catch (e) {
+        print('GPS retry error: $e');
+      }
+    }
+  }
+
+  // Extract token_id from QR code (if it's JSON)
+  int? _extractTokenId(String code) {
+    try {
+      // Try to parse as JSON
+      final data = jsonDecode(code);
+      if (data is Map && data.containsKey('token_id')) {
+        return data['token_id'] as int;
+      }
+    } catch (e) {
+      // Not JSON, check if it starts with "TOKEN_"
+      if (code.startsWith('TOKEN_')) {
+        return int.tryParse(code.replaceFirst('TOKEN_', ''));
+      }
+    }
+    return null;
+  }
+
+  Future<void> _handleScan(String code) async {
+    if (isProcessing) return;
+    
+    setState(() => isProcessing = true);
+
+    try {
+      // Get fresh GPS location with retries
+      Position position;
+      int retries = 0;
+      
+      do {
+        position = await Geolocator.getCurrentPosition(
+          desiredAccuracy: LocationAccuracy.high,
+          timeLimit: const Duration(seconds: 10),
+        );
+        
+        print('GPS Reading: ${position.latitude}, ${position.longitude} (accuracy: ${position.accuracy}m)');
+        
+        retries++;
+        if (position.accuracy > 50 && retries < 3) {
+          print('Poor accuracy, retrying...');
+          await Future.delayed(const Duration(seconds: 1));
+        }
+      } while (position.accuracy > 50 && retries < 3);
+
+      // Warn if accuracy is still poor
+      if (position.accuracy > 100) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('⚠️ GPS accuracy: ${position.accuracy.toStringAsFixed(0)}m - results may be inaccurate'),
+            backgroundColor: Colors.orange,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+
+      final timestamp = DateTime.now().toUtc().toIso8601String();
+      
+      // Submit scan to backend (GPS anomaly detection)
+      final response = await apiService.submitScan(
+        unitId: code,
+        latitude: position.latitude,
+        longitude: position.longitude,
+        timestamp: timestamp,
+      );
+
+      // GPS verification result
+      final isAnomalous = response['anomaly_detected'] ?? false;
+      final speedKmh = response['speed_kmh']?.toStringAsFixed(2) ?? 'N/A';
+      final distanceKm = response['distance_km']?.toStringAsFixed(2) ?? 'N/A';
+
+      // Try blockchain verification
+      String blockchainStatus = '';
+      final tokenId = _extractTokenId(code);
+      
+      if (tokenId != null) {
+        try {
+          final blockchainData = await apiService.verifyBlockchain(tokenId);
+          
+          if (blockchainData['verified'] == true) {
+            final manufacturer = blockchainData['manufacturer'] ?? 'Unknown';
+            final expiry = blockchainData['expiry_date'] ?? 'Unknown';
+            final revoked = blockchainData['revoked'] ?? false;
+            
+            if (revoked) {
+              blockchainStatus = '\n\n🚫 BLOCKCHAIN: REVOKED\nDO NOT USE THIS MEDICINE';
+            } else {
+              blockchainStatus = '\n\n✅ Blockchain Verified\n'
+                  'Manufacturer: $manufacturer\n'
+                  'Expiry: $expiry';
+            }
+          } else {
+            blockchainStatus = '\n\n⚠️ Not verified on blockchain';
+          }
+        } catch (e) {
+          blockchainStatus = '\n\n⚠️ Blockchain check failed';
+          print('Blockchain error: $e');
+        }
+      } else {
+        blockchainStatus = '\n\n💡 No token_id found in QR';
+      }
+
+      // Show combined result
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              isAnomalous
+                  ? '⚠️ GPS ANOMALY DETECTED!\n'
+                    'Speed: $speedKmh km/h\n'
+                    'Distance: $distanceKm km\n'
+                    'GPS: ${position.latitude.toStringAsFixed(3)}, ${position.longitude.toStringAsFixed(3)}\n'
+                    'Accuracy: ${position.accuracy.toStringAsFixed(0)}m'
+                    '$blockchainStatus'
+                  : '✅ GPS Verified\n'
+                    'Speed: $speedKmh km/h\n'
+                    'Distance: $distanceKm km\n'
+                    'GPS: ${position.latitude.toStringAsFixed(3)}, ${position.longitude.toStringAsFixed(3)}\n'
+                    'Accuracy: ${position.accuracy.toStringAsFixed(0)}m'
+                    '$blockchainStatus',
+            ),
+            backgroundColor: isAnomalous ? Colors.red : Colors.green,
+            duration: const Duration(seconds: 8),
+          ),
+        );
+      }
+
+      print('API Response: $response');
+      print('Blockchain Status: $blockchainStatus');
+      print('GPS Accuracy: ${position.accuracy}m');
+
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+      print('Error: $e');
+    } finally {
+      await Future.delayed(const Duration(seconds: 3));
+      setState(() => isProcessing = false);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('TraceMind Scanner'),
-        backgroundColor: Colors.deepPurple,
+        title: const Text('Scan QR Code'),
+        actions: [
+          // GPS status indicator
+          if (currentAccuracy != null)
+            Padding(
+              padding: const EdgeInsets.only(right: 8.0),
+              child: Center(
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: gpsReady ? Colors.green : Colors.orange,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        gpsReady ? Icons.gps_fixed : Icons.gps_not_fixed,
+                        size: 16,
+                        color: Colors.white,
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        '${currentAccuracy!.toStringAsFixed(0)}m',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          IconButton(
+            icon: Icon(cameraController.torchEnabled ? Icons.flash_on : Icons.flash_off),
+            onPressed: () => cameraController.toggleTorch(),
+          ),
+        ],
       ),
       body: Stack(
         children: [
-          // Camera view
           MobileScanner(
-            controller: controller,
+            controller: cameraController,
             onDetect: (capture) {
-              // Only process if scan was requested via button
-              if (!_scanRequested || _isScanning) return;
-              
               final List<Barcode> barcodes = capture.barcodes;
-              if (barcodes.isNotEmpty) {
-                final String? code = barcodes.first.displayValue;
-                if (code != null) {
-                  _handleScan(code);
+              for (final barcode in barcodes) {
+                if (barcode.rawValue != null) {
+                  _handleScan(barcode.rawValue!);
+                  break;
                 }
               }
             },
           ),
-          
-          // Scan frame guide
-          Center(
-            child: Container(
-              width: 250,
-              height: 250,
-              decoration: BoxDecoration(
-                border: Border.all(
-                  color: _scanRequested ? Colors.green : Colors.white,
-                  width: 3,
-                ),
-                borderRadius: BorderRadius.circular(20),
-              ),
-              child: Center(
-                child: Text(
-                  _scanRequested ? 'SCANNING...' : 'Align QR Code',
-                  style: TextStyle(
-                    color: _scanRequested ? Colors.green : Colors.white,
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                    backgroundColor: Colors.black54,
-                  ),
+          if (isProcessing)
+            Container(
+              color: Colors.black54,
+              child: const Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    CircularProgressIndicator(color: Colors.white),
+                    SizedBox(height: 16),
+                    Text(
+                      'Verifying GPS + Blockchain...',
+                      style: TextStyle(color: Colors.white, fontSize: 16),
+                    ),
+                  ],
                 ),
               ),
             ),
-          ),
-          
-          // Result overlay
-          if (_result != null)
-            Positioned(
-              bottom: 0,
-              left: 0,
-              right: 0,
-              child: Container(
-                padding: const EdgeInsets.all(20),
-                color: _result!.contains('ANOMALY') 
-                    ? Colors.red 
-                    : _result!.contains('verified')
-                        ? Colors.green
-                        : Colors.orange,
-                child: Text(
-                  _result!,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                  ),
-                  textAlign: TextAlign.center,
-                ),
-              ),
-            ),
-          
-          // Manual Scan Button
-          Positioned(
-            bottom: _result != null ? 120 : 40,
-            left: 0,
-            right: 0,
-            child: Center(
-              child: ElevatedButton(
-                onPressed: _isScanning ? null : _requestScan,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: _scanRequested ? Colors.green : Colors.deepPurple,
-                  disabledBackgroundColor: Colors.grey,
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 50,
-                    vertical: 20,
-                  ),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(30),
-                  ),
-                ),
-                child: Text(
-                  _isScanning 
-                      ? 'PROCESSING...' 
-                      : _scanRequested 
-                          ? 'READY - POINT AT QR'
-                          : 'TAP TO SCAN',
-                  style: const TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.white,
-                  ),
-                ),
-              ),
-            ),
-          ),
         ],
       ),
     );
-  }
-
-  @override
-  void dispose() {
-    controller.dispose();
-    super.dispose();
   }
 }

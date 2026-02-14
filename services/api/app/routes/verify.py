@@ -11,7 +11,7 @@ router = APIRouter()
 
 MAX_SPEED_KMH = 1000
 
-# 🔐 API Key Setup
+#API Key Setup
 api_key_header = APIKeyHeader(name="x-api-key", auto_error=False)
 API_SECRET_KEY = os.getenv("API_SECRET_KEY")
 print("LOADED API KEY:", API_SECRET_KEY)
@@ -24,10 +24,6 @@ def verify_api_key(api_key: str = Depends(api_key_header)):
     if api_key != API_SECRET_KEY:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
-
-# ---------------------------------------------------
-# VERIFY ENDPOINT
-# ---------------------------------------------------
 
 @router.post("/verify", dependencies=[Depends(verify_api_key)])
 async def verify_scan(payload: ScanPayload):
@@ -89,7 +85,6 @@ async def verify_scan(payload: ScanPayload):
 
         insert_response = supabase.table("scans").insert(data).execute()
 
-        # ✅ Correct v2 handling
         if not insert_response.data:
             raise Exception("Insert failed")
 
@@ -106,9 +101,22 @@ async def verify_scan(payload: ScanPayload):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ---------------------------------------------------
-# HISTORY ENDPOINT
-# ---------------------------------------------------
+@router.get("/scans", dependencies=[Depends(verify_api_key)])
+async def get_all_scans():
+    """Get all scans for dashboard"""
+    try:
+        response = (
+            supabase
+            .table("scans")
+            .select("*")
+            .order("timestamp", desc=True)
+            .limit(100)
+            .execute()
+        )
+        return response.data
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @router.get("/history/{unit_id}", dependencies=[Depends(verify_api_key)])
 async def get_history(unit_id: str):
@@ -132,10 +140,6 @@ async def get_history(unit_id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-
-# ---------------------------------------------------
-# ANALYTICS ENDPOINT
-# ---------------------------------------------------
 
 @router.get("/analytics/{unit_id}", dependencies=[Depends(verify_api_key)])
 async def get_analytics(unit_id: str):
