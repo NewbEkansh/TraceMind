@@ -1,111 +1,109 @@
 import math
+import numpy as np
 from datetime import datetime
-from schema import ScanData, ThreatAssessment
+from sklearn.ensemble import IsolationForest
+from typing import Dict, Tuple, List
 
-# CONSTANTS
-EARTH_RADIUS_KM = 6371.0
-MAX_POSSIBLE_SPEED_KMH = 900.0  # Commercial flight speed approx. 900 km/h
+# --- Configuration ---
+EARTH_RADIUS_KM = 6371
+VELOCITY_THRESHOLD_KMH = 900.0  # Approx commercial flight speed
+CONTAMINATION_RATE = 0.05       # Estimated % of anomalies in data
+RANDOM_STATE = 42
 
-def calculate_haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    """
-    Calculates the great-circle distance between two points on the Earth's surface.
-    Returns distance in kilometers.
-    """
-    # Convert decimal degrees to radians
-    phi1, phi2 = math.radians(lat1), math.radians(lat2)
-    dphi = math.radians(lat2 - lat1)
-    dlambda = math.radians(lon2 - lon1)
+class SentinelAI:
+    def __init__(self):
+        self.model = IsolationForest(contamination=CONTAMINATION_RATE, random_state=RANDOM_STATE)
+        self.is_trained = False
+        # Train immediately on initialization so the API is ready to serve
+        self._train_initial_model()
 
-    # Haversine formula
-    a = math.sin(dphi / 2)**2 + \
-        math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2)**2
-    
-    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-    
-    return EARTH_RADIUS_KM * c
+    def _train_initial_model(self):
+        """
+        Bootstraps the model with synthetic 'normal' scanning behavior.
+        We simulate 200 normal scans to teach the model what 'Good' looks like.
+        Features: [hour_of_day, scan_frequency_score]
+        """
+        # Normal behavior: Scans mostly between 8 AM - 8 PM (8-20), with low frequency scores (0-2)
+        # using numpy to generate a normal distribution of data
+        X_train = np.random.normal(loc=[14, 1.0], scale=[4, 0.5], size=(200, 2))
+        self.model.fit(X_train)
+        self.is_trained = True
+        print(f" [TraceMind] SentinelAI Model initialized and trained on {len(X_train)} synthetic records.")
 
-def analyze_scan(current_scan: ScanData, last_scan: ScanData | None) -> ThreatAssessment:
-    """
-    Analyzes the current scan against the previous scan history.
-    """
-    # CASE 1: First time scan (No history)
-    if last_scan is None:
-        return ThreatAssessment(
-            is_anomaly=False,
-            risk_score=0.0,
-            risk_level="Low",
-            details="First scan recorded. Product registered on chain."
+    def haversine_distance(self, coord1: Tuple[float, float], coord2: Tuple[float, float]) -> float:
+        """
+        Calculates the great-circle distance between two points on the Earth surface.
+        """
+        lat1, lon1 = coord1
+        lat2, lon2 = coord2
+        
+        dlat = math.radians(lat2 - lat1)
+        dlon = math.radians(lon2 - lon1)
+        
+        a = (math.sin(dlat / 2) * math.sin(dlat / 2) +
+             math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) *
+             math.sin(dlon / 2) * math.sin(dlon / 2))
+        
+        c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+        return EARTH_RADIUS_KM * c
+
+    def calculate_velocity(self, prev_scan: Dict, current_scan: Dict) -> float:
+        """
+        Returns velocity in km/h between two scan events.
+        """
+        t1 = datetime.fromisoformat(prev_scan['timestamp'])
+        t2 = datetime.fromisoformat(current_scan['timestamp'])
+        
+        time_diff_hours = abs((t2 - t1).total_seconds()) / 3600.0
+        
+        # Avoid division by zero (simultaneous scans = infinite speed)
+        if time_diff_hours < 0.001:
+            return 99999.0
+
+        distance = self.haversine_distance(
+            (prev_scan['latitude'], prev_scan['longitude']),
+            (current_scan['latitude'], current_scan['longitude'])
         )
+        
+        return distance / time_diff_hours
 
-    # CASE 2: Calculate Space-Time Delta
-    distance_km = calculate_haversine_distance(
-        current_scan.latitude, current_scan.longitude,
-        last_scan.latitude, last_scan.longitude
-    )
+    def predict_anomaly_score(self, hour: int, frequency_score: float) -> int:
+        """
+        Uses Isolation Forest to detect statistical anomalies.
+        Returns: -1 for Anomaly, 1 for Normal
+        """
+        features = np.array([[hour, frequency_score]])
+        return self.model.predict(features)[0]
 
-    # Time difference in hours
-    time_delta = (current_scan.timestamp - last_scan.timestamp).total_seconds() / 3600.0
+    def analyze_risk(self, current_scan: Dict, history: List[Dict]) -> str:
+        """
+        The Master Logic: Combines Physics (Velocity) and ML (Isolation Forest).
+        """
+        if history:
+            last_scan = history[-1]
+            velocity = self.calculate_velocity(last_scan, current_scan)
+            print(f" [Debug] Calculated Velocity: {velocity:.2f} km/h")
+            
+            if velocity > VELOCITY_THRESHOLD_KMH:
+                return "CRITICAL" # Physically impossible
 
-    # Edge Case: Simultaneous scans (prevent division by zero)
-    if time_delta <= 0:
-        if distance_km > 0.5: # If distance is significant (>500m) but time is 0
-            return ThreatAssessment(
-                is_anomaly=True,
-                risk_score=1.0,
-                risk_level="Critical",
-                details=f"Impossible Teleportation: Moved {distance_km:.2f} km in 0 seconds."
-            )
-        else:
-            return ThreatAssessment(
-                is_anomaly=False,
-                risk_score=0.1,
-                risk_level="Low",
-                details="Duplicate scan detected at same location."
-            )
+        scan_time = datetime.fromisoformat(current_scan['timestamp'])
+        hour = scan_time.hour
+        
+        # If the last scan was very recent (< 5 mins), the score spikes.
+        freq_score = 1.0 
+        if history:
+            last_time = datetime.fromisoformat(history[-1]['timestamp'])
+            seconds_diff = abs((scan_time - last_time).total_seconds())
+            if seconds_diff < 300: # Less than 5 mins
+                freq_score = 5.0   # High frequency spike
+        
+        ml_verdict = self.predict_anomaly_score(hour, freq_score)
+        
+        if ml_verdict == -1:
+            return "HIGH" # Statistical anomaly (e.g., 3 AM scan or rapid burst)
 
-    # CASE 3: Velocity Check
-    speed_kmh = distance_km / time_delta
+        return "LOW"
 
-    if speed_kmh > MAX_POSSIBLE_SPEED_KMH:
-        return ThreatAssessment(
-            is_anomaly=True,
-            risk_score=0.95,
-            risk_level="Critical",
-            details=f"Impossible Travel: Speed {speed_kmh:.0f} km/h exceeds max threshold ({MAX_POSSIBLE_SPEED_KMH} km/h)."
-        )
-    elif speed_kmh > 150: # Example: Too fast for a truck, but maybe a plane?
-        return ThreatAssessment(
-            is_anomaly=False, # Not strictly impossible, but suspicious
-            risk_score=0.4,
-            risk_level="Medium",
-            details=f"High Velocity: {speed_kmh:.0f} km/h. flagged for review."
-        )
-    
-    return ThreatAssessment(
-        is_anomaly=False,
-        risk_score=0.0,
-        risk_level="Low",
-        details=f"Valid movement. Speed: {speed_kmh:.0f} km/h."
-    )
-
-# --- QUICK TEST BLOCK (Run this file directly to test) ---
-if __name__ == "__main__":
-    # Mock Data: Mumbai at 10:00 AM
-    scan_a = ScanData(
-        product_id="123", 
-        latitude=19.0760, longitude=72.8777, 
-        timestamp=datetime(2023, 10, 27, 10, 0, 0),
-        device_id="dev_1"
-    )
-    
-    # Mock Data: Delhi at 10:30 AM (Impossible! 1200km in 30 mins)
-    scan_b = ScanData(
-        product_id="123", 
-        latitude=28.7041, longitude=77.1025, 
-        timestamp=datetime(2023, 10, 27, 10, 30, 0),
-        device_id="dev_2"
-    )
-
-    print("Testing TraceMind Sentinel Logic...")
-    result = analyze_scan(scan_b, scan_a)
-    print(f"Result: {result.risk_level} - {result.details}")
+# Export the singleton instance
+engine = SentinelAI()
