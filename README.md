@@ -71,20 +71,14 @@ TraceMind is an end-to-end pharmaceutical anti-counterfeit platform built for th
 
 ### Clone
 ```bash
-git clone https://github.com/your-username/TraceMind.git
+git clone https://github.com/NewbEkansh/TraceMind.git
 cd TraceMind
 ```
 
 ### Environment Setup
-
-**Backend API** (`services/api/.env`):
+**Copy the template for Backend(Services/api/.env)**
 ```env
-SUPABASE_URL=your_supabase_url
-SUPABASE_KEY=your_supabase_anon_key
-API_SECRET_KEY=your_api_key
-CONTRACT_ADDRESS=0x19F7738EA8351dffF8D4430d05C368684Bd9235c
-ALCHEMY_URL=your_alchemy_rpc_url
-PRIVATE_KEY=your_wallet_private_key
+cp .env.example services/api/.env
 ```
 
 **Dashboard** (`apps/dashboard/.env.local`):
