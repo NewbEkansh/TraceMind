@@ -1,0 +1,43 @@
+@import "tailwindcss";
+
+@theme {
+  --color-background: 224 71% 4%;
+  --color-foreground: 213 31% 91%;
+  --color-border: 216 34% 17%;
+}
+
+:root {
+  --background: 224 71% 4%;
+  --foreground: 213 31% 91%;
+  --border: 216 34% 17%;
+}
+
+body {
+  background-color: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  overflow: hidden; 
+}
+
+/* Custom Scrollbar */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: #0f172a; 
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: #334155; 
+  border-radius: 4px;
+}
+
+/* Map Fixes */
+.leaflet-container {
+  width: 100%;
+  height: 100%;
+  z-index: 10;
+  background: #0f172a;
+}
+.leaflet-bottom.leaflet-right {
+  display: none;
+}

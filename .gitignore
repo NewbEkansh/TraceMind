@@ -1,31 +1,45 @@
-# Dependencies
-node_modules/
-.next/
+# --- Global & System ---
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.log
 
-# Flutter
-apps/mobile/.dart_tool/
-apps/mobile/.flutter-plugins-dependencies
-apps/mobile/.idea/
-apps/mobile/build/
-apps/mobile/ios/
-apps/mobile/android/
-apps/mobile/pubspec.lock
+# --- Python (FastAPI & AI Services) ---
+# Protects services/api/venv and services/analytics/venv
+**/venv/
+**/env/
+**/.env
+**/*.pyc
+**/__pycache__/
+**/.pytest_cache/
 
-# Python
-venv/
-__pycache__/
-*.pyc
-services/analytics/__pycache__/
+# --- Node.js & Next.js (Web Dashboard) ---
+# Protects apps/dashboard/node_modules
+**/node_modules/
+**/npm-debug.log*
+**/yarn-debug.log*
+**/yarn-error.log*
+**/.pnp.*
 
-# Hardhat
+# --- Next.js Build Artifacts ---
+apps/dashboard/.next/
+apps/dashboard/out/
+apps/dashboard/build/
+apps/dashboard/.env.local
+
+# --- Flutter (Mobile App) ---
+# Protects apps/mobile/build
+**/build/
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.pub-cache/
+pubspec.lock
+
+# --- Infrastructure & Secrets ---
+# Never commit keys or wallet mnemonics
+**/*.pem
+**/*.key
 infrastructure/contracts/artifacts/
 infrastructure/contracts/cache/
-infrastructure/contracts/node_modules/
-
-# Secrets
-services/api/.env
-infrastructure/contracts/.env
-
-# Editor
-.env.local
-next-env.d.ts
