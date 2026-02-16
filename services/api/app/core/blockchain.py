@@ -62,3 +62,16 @@ def get_medicine_data(token_id):
         }
     except Exception as e:
         return {"error": str(e)}
+
+def revoke_medicine(token_id):
+    """Revoke a medicine NFT on blockchain — permanent, immutable"""
+    nonce = w3.eth.get_transaction_count(account.address)
+    tx = contract.functions.revoke(token_id).build_transaction({
+        "from": account.address,
+        "nonce": nonce,
+        "gas": 300000,
+        "gasPrice": w3.eth.gas_price
+    })
+    signed = w3.eth.account.sign_transaction(tx, PRIVATE_KEY)
+    tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
+    return tx_hash.hex()

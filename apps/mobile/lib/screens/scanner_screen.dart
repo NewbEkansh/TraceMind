@@ -36,7 +36,6 @@ class _ScannerScreenState extends State<ScannerScreen> {
   // Initialize and warm up GPS
   Future<void> _initializeGPS() async {
     try {
-      // Check if location services are enabled
       bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
       if (!serviceEnabled) {
         if (mounted) {
@@ -51,7 +50,6 @@ class _ScannerScreenState extends State<ScannerScreen> {
         return;
       }
 
-      // Check permissions
       LocationPermission permission = await Geolocator.checkPermission();
       if (permission == LocationPermission.denied) {
         permission = await Geolocator.requestPermission();
@@ -68,7 +66,6 @@ class _ScannerScreenState extends State<ScannerScreen> {
         }
       }
 
-      // Get initial GPS fix to warm up
       print('🛰️ Warming up GPS...');
       Position position = await Geolocator.getCurrentPosition(
         desiredAccuracy: LocationAccuracy.high,
@@ -78,7 +75,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
       setState(() {
         lastKnownPosition = position;
         currentAccuracy = position.accuracy;
-        gpsReady = position.accuracy < 100; // Good if < 100m
+        gpsReady = position.accuracy < 100;
       });
 
       print('GPS Ready: ${position.latitude}, ${position.longitude}');
@@ -94,7 +91,6 @@ class _ScannerScreenState extends State<ScannerScreen> {
             ),
           );
         }
-        // Try to get better fix
         await _improveGPSAccuracy();
       } else {
         if (mounted) {
@@ -120,7 +116,6 @@ class _ScannerScreenState extends State<ScannerScreen> {
     }
   }
 
-  // Try to improve GPS accuracy
   Future<void> _improveGPSAccuracy() async {
     for (int i = 0; i < 3; i++) {
       await Future.delayed(const Duration(seconds: 2));
@@ -159,13 +154,11 @@ class _ScannerScreenState extends State<ScannerScreen> {
   // Extract token_id from QR code (if it's JSON)
   int? _extractTokenId(String code) {
     try {
-      // Try to parse as JSON
       final data = jsonDecode(code);
       if (data is Map && data.containsKey('token_id')) {
         return data['token_id'] as int;
       }
     } catch (e) {
-      // Not JSON, check if it starts with "TOKEN_"
       if (code.startsWith('TOKEN_')) {
         return int.tryParse(code.replaceFirst('TOKEN_', ''));
       }
@@ -179,7 +172,6 @@ class _ScannerScreenState extends State<ScannerScreen> {
     setState(() => isProcessing = true);
 
     try {
-      // Get fresh GPS location with retries
       Position position;
       int retries = 0;
       
@@ -198,7 +190,6 @@ class _ScannerScreenState extends State<ScannerScreen> {
         }
       } while (position.accuracy > 50 && retries < 3);
 
-      // Warn if accuracy is still poor
       if (position.accuracy > 100) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -210,16 +201,26 @@ class _ScannerScreenState extends State<ScannerScreen> {
       }
 
       final timestamp = DateTime.now().toUtc().toIso8601String();
+
+      // ✅ Parse QR JSON to extract unit_id
+      String unitId = code;
+      try {
+        final qrData = jsonDecode(code);
+        if (qrData is Map && qrData.containsKey('unit_id')) {
+          unitId = qrData['unit_id'];
+        }
+      } catch (e) {
+        unitId = code; // fallback to raw string if not JSON
+      }
       
       // Submit scan to backend (GPS anomaly detection)
       final response = await apiService.submitScan(
-        unitId: code,
+        unitId: unitId,
         latitude: position.latitude,
         longitude: position.longitude,
         timestamp: timestamp,
       );
 
-      // GPS verification result
       final isAnomalous = response['anomaly_detected'] ?? false;
       final speedKmh = response['speed_kmh']?.toStringAsFixed(2) ?? 'N/A';
       final distanceKm = response['distance_km']?.toStringAsFixed(2) ?? 'N/A';
@@ -255,7 +256,6 @@ class _ScannerScreenState extends State<ScannerScreen> {
         blockchainStatus = '\n\n💡 No token_id found in QR';
       }
 
-      // Show combined result
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -306,7 +306,6 @@ class _ScannerScreenState extends State<ScannerScreen> {
       appBar: AppBar(
         title: const Text('Scan QR Code'),
         actions: [
-          // GPS status indicator
           if (currentAccuracy != null)
             Padding(
               padding: const EdgeInsets.only(right: 8.0),
