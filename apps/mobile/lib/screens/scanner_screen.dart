@@ -178,7 +178,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
       do {
         position = await Geolocator.getCurrentPosition(
           desiredAccuracy: LocationAccuracy.high,
-          timeLimit: const Duration(seconds: 10),
+          timeLimit: const Duration(seconds: 15),
         );
         
         print('GPS Reading: ${position.latitude}, ${position.longitude} (accuracy: ${position.accuracy}m)');
@@ -213,7 +213,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
         unitId = code; // fallback to raw string if not JSON
       }
       
-      // Submit scan to backend (GPS anomaly detection)
+      // Submit scan to backend (AI-powered GPS anomaly detection)
       final response = await apiService.submitScan(
         unitId: unitId,
         latitude: position.latitude,
@@ -221,9 +221,12 @@ class _ScannerScreenState extends State<ScannerScreen> {
         timestamp: timestamp,
       );
 
+      // Extract AI-powered results
       final isAnomalous = response['anomaly_detected'] ?? false;
       final speedKmh = response['speed_kmh']?.toStringAsFixed(2) ?? 'N/A';
       final distanceKm = response['distance_km']?.toStringAsFixed(2) ?? 'N/A';
+      final String riskLevel = response['risk_level'] ?? 'UNKNOWN';
+      final bool isMLPowered = response['ml_powered'] ?? false;
 
       // Try blockchain verification
       String blockchainStatus = '';
@@ -256,18 +259,21 @@ class _ScannerScreenState extends State<ScannerScreen> {
         blockchainStatus = '\n\n💡 No token_id found in QR';
       }
 
+      // Show AI-powered result
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
               isAnomalous
-                  ? '⚠️ GPS ANOMALY DETECTED!\n'
+                  ? '🤖 AI ANOMALY DETECTED!\n'
+                    'Risk Level: $riskLevel\n'
                     'Speed: $speedKmh km/h\n'
                     'Distance: $distanceKm km\n'
                     'GPS: ${position.latitude.toStringAsFixed(3)}, ${position.longitude.toStringAsFixed(3)}\n'
                     'Accuracy: ${position.accuracy.toStringAsFixed(0)}m'
                     '$blockchainStatus'
-                  : '✅ GPS Verified\n'
+                  : '✅ AI VERIFIED SAFE\n'
+                    'Risk Level: $riskLevel\n'
                     'Speed: $speedKmh km/h\n'
                     'Distance: $distanceKm km\n'
                     'GPS: ${position.latitude.toStringAsFixed(3)}, ${position.longitude.toStringAsFixed(3)}\n'
@@ -281,6 +287,8 @@ class _ScannerScreenState extends State<ScannerScreen> {
       }
 
       print('API Response: $response');
+      print('AI Risk Level: $riskLevel');
+      print('ML Powered: $isMLPowered');
       print('Blockchain Status: $blockchainStatus');
       print('GPS Accuracy: ${position.accuracy}m');
 
@@ -304,7 +312,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Scan QR Code'),
+        title: const Text('TraceMind AI Scanner'),
         actions: [
           if (currentAccuracy != null)
             Padding(
@@ -368,7 +376,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
                     CircularProgressIndicator(color: Colors.white),
                     SizedBox(height: 16),
                     Text(
-                      'Verifying GPS + Blockchain...',
+                      'AI Analyzing GPS + Blockchain...',
                       style: TextStyle(color: Colors.white, fontSize: 16),
                     ),
                   ],

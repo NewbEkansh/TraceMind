@@ -1,4 +1,5 @@
 "use client";
+
 import { useEffect, useRef } from "react";
 import { MapContainer, TileLayer, CircleMarker, Popup, useMap } from "react-leaflet";
 import MarkerClusterGroup from "react-leaflet-cluster";
@@ -11,42 +12,60 @@ function MapController({ alerts }: { alerts: Alert[] }) {
   const prevCriticalCount = useRef(0);
   const heatLayerRef = useRef<any>(null);
 
-  // Heatmap effect
+  // Heatmap effect - FIXED with dynamic import
   useEffect(() => {
     if (typeof window === "undefined") return;
 
-    const L = require("leaflet");
-    require("leaflet.heat");
+    // Dynamic import to avoid SSR issues
+    const loadHeatmap = async () => {
+      try {
+        const L = (await import("leaflet")).default;
+        
+        // Dynamically import leaflet.heat
+        await import("leaflet.heat");
 
-    // Remove existing heat layer
-    if (heatLayerRef.current) {
-      map.removeLayer(heatLayerRef.current);
-    }
+        // Remove existing heat layer
+        if (heatLayerRef.current) {
+          map.removeLayer(heatLayerRef.current);
+        }
 
-    const heatPoints = alerts
-      .filter((a) => a.location[0] && a.location[1])
-      .map((a) => [
-        a.location[0],
-        a.location[1],
-        a.risk_level === "CRITICAL" ? 1.0 : a.risk_level === "HIGH" ? 0.5 : 0.2,
-      ]);
+        const heatPoints = alerts
+          .filter((a) => a.location[0] && a.location[1])
+          .map((a) => [
+            a.location[0],
+            a.location[1],
+            a.risk_level === "CRITICAL" ? 1.0 : a.risk_level === "HIGH" ? 0.5 : 0.2,
+          ]);
 
-    if (heatPoints.length > 0) {
-      heatLayerRef.current = (L as any).heatLayer(heatPoints, {
-        radius: 35,
-        blur: 25,
-        maxZoom: 10,
-        max: 1.0,
-        gradient: {
-          0.0: "#1e3a5f",
-          0.3: "#1d4ed8",
-          0.5: "#f59e0b",
-          0.8: "#ef4444",
-          1.0: "#ff0000",
-        },
-      });
-      heatLayerRef.current.addTo(map);
-    }
+        if (heatPoints.length > 0) {
+          heatLayerRef.current = (L as any).heatLayer(heatPoints, {
+            radius: 35,
+            blur: 25,
+            maxZoom: 10,
+            max: 1.0,
+            gradient: {
+              0.0: "#1e3a5f",
+              0.3: "#1d4ed8",
+              0.5: "#f59e0b",
+              0.8: "#ef4444",
+              1.0: "#ff0000",
+            },
+          });
+          heatLayerRef.current.addTo(map);
+        }
+      } catch (error) {
+        console.error("Error loading heatmap:", error);
+      }
+    };
+
+    loadHeatmap();
+
+    // Cleanup
+    return () => {
+      if (heatLayerRef.current) {
+        map.removeLayer(heatLayerRef.current);
+      }
+    };
   }, [alerts, map]);
 
   // Auto-zoom to new critical alerts
@@ -71,6 +90,7 @@ export default function Map({ alerts }: { alerts: Alert[] }) {
       zoom={5}
       style={{ height: "100%", width: "100%" }}
       className="bg-slate-900"
+      scrollWheelZoom={true}
     >
       <TileLayer
         attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'

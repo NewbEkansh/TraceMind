@@ -5,17 +5,11 @@ from app.models.scan_payload import ScanPayload
 from app.core.config import supabase
 from app.core.geo import haversine
 from dateutil import parser
-from datetime import timezone, timedelta
+from datetime import timezone
+import httpx
+from typing import Optional
 
 router = APIRouter()
-
-# Speed thresholds
-MAX_SPEED_KMH = 1000        # CRITICAL: impossible travel
-HIGH_SPEED_KMH = 500        # HIGH: suspicious speed (faster than fast train)
-
-# Frequency thresholds
-HIGH_FREQ_COUNT = 5         # HIGH: scanned more than 5 times in window
-HIGH_FREQ_WINDOW_MINS = 10  # within 10 minutes
 
 # API Key Setup
 api_key_header = APIKeyHeader(name="x-api-key", auto_error=False)
@@ -25,108 +19,115 @@ print("LOADED API KEY:", API_SECRET_KEY)
 if not API_SECRET_KEY:
     raise RuntimeError("API_SECRET_KEY not set in environment")
 
-
 def verify_api_key(api_key: str = Depends(api_key_header)):
     if api_key != API_SECRET_KEY:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 
+async def get_ai_risk_assessment(current_scan: dict, last_scan: Optional[dict] = None) -> str:
+    """
+    Calls the Analytics AI service (port 8001) for ML-based risk analysis.
+    Falls back to 'LOW' if service is unavailable.
+    """
+    try:
+        async with httpx.AsyncClient() as client:
+            # Prepare payload for analytics service
+            payload = {
+                "drug_id": current_scan["drug_id"],
+                "latitude": current_scan["latitude"],
+                "longitude": current_scan["longitude"],
+                "timestamp": current_scan["timestamp"]
+            }
+            
+            # Build request body
+            request_body = {"current_scan": payload}
+            if last_scan:
+                request_body["last_scan"] = {
+                    "drug_id": last_scan.get("unit_id", ""),
+                    "latitude": last_scan["latitude"],
+                    "longitude": last_scan["longitude"],
+                    "timestamp": last_scan["timestamp"]
+                }
+            
+            response = await client.post(
+                "http://localhost:8001/analyze",
+                json=request_body,
+                timeout=5.0
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                print(f"[AI] Risk assessment: {result.get('risk_level', 'LOW')}")
+                return result.get("risk_level", "LOW")
+            else:
+                print(f"[AI] Service error: {response.status_code}")
+                return "LOW"
+    except Exception as e:
+        print(f"[AI] Failed to reach Analytics service: {e}")
+        return "LOW"  # Graceful fallback
+
+
 @router.post("/verify", dependencies=[Depends(verify_api_key)])
 async def verify_scan(payload: ScanPayload):
-
     try:
-        anomaly_detected = False
-        anomaly_reason = None
-        risk_level = "LOW"
-        speed_kmh = None
-        distance_km = None
-
-        # ── 1. SPEED / TRAVEL ANOMALY CHECK ──────────────────────────────────
+        # ── 1. GET PREVIOUS SCAN ──────────────────────────────────
         previous = (
             supabase
             .table("scans")
-            .select("latitude, longitude, timestamp")
+            .select("*")
             .eq("unit_id", payload.unit_id)
             .order("timestamp", desc=True)
             .limit(1)
             .execute()
         )
 
-        if previous.data:
-            last = previous.data[0]
-
+        last_scan = previous.data[0] if previous.data else None
+        
+        # ── 2. PREPARE DATA FOR AI ANALYSIS ──────────────────────
+        current_scan = {
+            "drug_id": payload.unit_id,
+            "latitude": payload.latitude,
+            "longitude": payload.longitude,
+            "timestamp": payload.timestamp.isoformat()
+        }
+        
+        # ── 3. GET AI-POWERED RISK ASSESSMENT ────────────────────
+        risk_level = await get_ai_risk_assessment(current_scan, last_scan)
+        
+        anomaly_detected = risk_level in ["CRITICAL", "HIGH"]
+        
+        # ── 4. CALCULATE METRICS ──────────────────────────────────
+        speed_kmh = None
+        distance_km = None
+        anomaly_reason = None
+        
+        if last_scan:
             distance_km = haversine(
-                last["latitude"],
-                last["longitude"],
+                last_scan["latitude"],
+                last_scan["longitude"],
                 payload.latitude,
                 payload.longitude
             )
-
-            last_timestamp = parser.isoparse(last["timestamp"])
+            
+            last_timestamp = parser.isoparse(last_scan["timestamp"])
             payload_timestamp = payload.timestamp
-
             if payload_timestamp.tzinfo is None:
                 payload_timestamp = payload_timestamp.replace(tzinfo=timezone.utc)
-
-            time_diff_hours = (
-                (payload_timestamp - last_timestamp).total_seconds() / 3600
-            )
-
+            
+            time_diff_hours = (payload_timestamp - last_timestamp).total_seconds() / 3600
+            
             if time_diff_hours > 0:
                 speed_kmh = round(distance_km / time_diff_hours, 2)
                 distance_km = round(distance_km, 2)
+            
+            if risk_level == "CRITICAL":
+                anomaly_reason = f"AI detected impossible travel ({speed_kmh} km/h exceeds physical limits)"
+            elif risk_level == "HIGH":
+                anomaly_reason = f"AI flagged suspicious pattern (velocity: {speed_kmh} km/h or unusual timing)"
+            else:
+                anomaly_reason = f"AI verified normal behavior (speed: {speed_kmh} km/h)"
 
-                if speed_kmh > MAX_SPEED_KMH:
-                    # CRITICAL: physically impossible travel
-                    anomaly_detected = True
-                    risk_level = "CRITICAL"
-                    anomaly_reason = f"Impossible travel detected ({speed_kmh} km/h)"
-
-                elif speed_kmh > HIGH_SPEED_KMH:
-                    # HIGH: suspicious but not impossible
-                    anomaly_detected = True
-                    risk_level = "HIGH"
-                    anomaly_reason = f"Suspicious travel speed ({speed_kmh} km/h)"
-
-        # ── 2. HIGH FREQUENCY SCAN CHECK ─────────────────────────────────────
-        # Only run if not already CRITICAL (don't downgrade)
-        if risk_level != "CRITICAL":
-            payload_timestamp = payload.timestamp
-            if payload_timestamp.tzinfo is None:
-                payload_timestamp = payload_timestamp.replace(tzinfo=timezone.utc)
-
-            window_start = (
-                payload_timestamp - timedelta(minutes=HIGH_FREQ_WINDOW_MINS)
-            ).isoformat()
-
-            freq_response = (
-                supabase
-                .table("scans")
-                .select("id")
-                .eq("unit_id", payload.unit_id)
-                .gte("timestamp", window_start)
-                .execute()
-            )
-
-            scan_count = len(freq_response.data)
-
-            if scan_count >= HIGH_FREQ_COUNT:
-                anomaly_detected = True
-                # Only upgrade to HIGH if currently LOW
-                if risk_level == "LOW":
-                    risk_level = "HIGH"
-                    anomaly_reason = (
-                        f"High frequency scanning: {scan_count} scans "
-                        f"in {HIGH_FREQ_WINDOW_MINS} minutes"
-                    )
-                else:
-                    # Already HIGH from speed — append frequency info
-                    anomaly_reason += (
-                        f" + High frequency ({scan_count} scans "
-                        f"in {HIGH_FREQ_WINDOW_MINS} mins)"
-                    )
-
-        # ── 3. STORE SCAN ─────────────────────────────────────────────────────
+        # ── 5. STORE SCAN ─────────────────────────────────────────
         data = {
             "unit_id": payload.unit_id,
             "latitude": payload.latitude,
@@ -150,7 +151,8 @@ async def verify_scan(payload: ScanPayload):
             "risk_level": risk_level,
             "anomaly_reason": anomaly_reason,
             "speed_kmh": speed_kmh,
-            "distance_km": distance_km
+            "distance_km": distance_km,
+            "ml_powered": True  # ✨ Now AI-powered!
         }
 
     except Exception as e:

@@ -53,7 +53,7 @@ class ApiService {
         return {
           'verified': data['verification']?['valid'] ?? false,
           'manufacturer': data['medicine_data']?['manufacturer'] ?? 'Unknown',
-          'batch_id': data['medicine_id']?['batch_id'] ?? 'Unknown',
+          'batch_id': data['medicine_data']?['batch_id'] ?? 'Unknown',  // ✅ FIXED!
           'expiry_date': data['medicine_data']?['expiry_date'] ?? 'Unknown',
           'revoked': data['medicine_data']?['revoked'] ?? false,
         };

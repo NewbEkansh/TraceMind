@@ -17,21 +17,29 @@ export interface Alert {
 export function useRealTimeAlerts() {
   const [alerts, setAlerts] = useState<Alert[]>([]);
 
-  // HELPER: Converts Friend's DB Format -> Your Dashboard Format
+  // HELPER: Converts DB row → Dashboard Alert format
   const mapDatabaseRowToAlert = (row: any): Alert => {
+    // Use risk_level directly from DB if available, fallback to anomaly_detected
+    let risk_level: "LOW" | "HIGH" | "CRITICAL" = "LOW";
+
+    if (row.risk_level === "CRITICAL") {
+      risk_level = "CRITICAL";
+    } else if (row.risk_level === "HIGH") {
+      risk_level = "HIGH";
+    } else if (row.anomaly_detected) {
+      // Fallback for old scans that don't have risk_level stored
+      risk_level = "CRITICAL";
+    } else {
+      risk_level = "LOW";
+    }
+
     return {
       id: row.id,
-      drug_id: row.unit_id || "Unknown ID", // Mapping unit_id -> drug_id
-
-      // Logic: If anomaly is TRUE, we mark it CRITICAL. Else LOW.
-      risk_level: row.anomaly_detected ? "CRITICAL" : "LOW",
-
+      drug_id: row.unit_id || "Unknown ID",
+      risk_level,
       timestamp: row.timestamp,
-
-      // Combine lat/long back into an array
       location: [row.latitude || 20.5, row.longitude || 78.9],
-
-      details: row.anomaly_reason || "Routine Scan", // Mapping anomaly_reason -> details
+      details: row.anomaly_reason || "Routine Scan",
     };
   };
 
@@ -42,7 +50,7 @@ export function useRealTimeAlerts() {
         .from("scans")
         .select("*")
         .order("timestamp", { ascending: false })
-        .limit(20);
+        .limit(50);
 
       if (data && !error) {
         setAlerts(data.map(mapDatabaseRowToAlert));
