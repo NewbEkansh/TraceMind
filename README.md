@@ -198,7 +198,7 @@ curl -X POST "http://localhost:8000/verify" \
 ## 📊 Smart Contract
 
 **Network:** Ethereum Sepolia Testnet  
-**Contract:** [`0x19F7738EA8351dffF8D4430d05C368684Bd9235c`](https://sepolia.etherscan.io/address/0x19F7738EA8351dffF8D4430d05C368684Bd9235c)
+**Contract:** [`0xYourDeployedContractAddress`](https://sepolia.etherscan.io/address/0xYourDeployedContractAddress)
 
 ```solidity
 // Core functions
