@@ -271,4 +271,5 @@ MIT License — see [LICENSE](LICENSE) for details.
   <strong>TraceMind</strong> — Protecting medicine integrity with AI + Blockchain
   <br/>
   <sub>Built with ❤️ for safer pharmaceutical supply chains</sub>
+    :D
 </div>
