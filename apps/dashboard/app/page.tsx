@@ -96,9 +96,7 @@ export default function Dashboard() {
 
       {/* Main Content Container */}
       <div className="flex-1 overflow-hidden flex flex-col p-6 gap-6">
-        {/* Metrics Cards */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 flex-shrink-0">
-          {/* Total Scans */}
           <div className="group bg-gradient-to-br from-slate-800/50 to-slate-900/50 backdrop-blur-xl rounded-2xl p-6 border border-slate-700/50 hover:border-blue-500/50 transition-all duration-300 hover:shadow-xl hover:shadow-blue-500/10 hover:-translate-y-1">
             <div className="flex items-start justify-between mb-4">
               <div className="bg-blue-500/10 p-3 rounded-xl group-hover:bg-blue-500/20 transition-colors">
